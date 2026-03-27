@@ -1,0 +1,25 @@
+{
+    "version": 1,
+    "author": "Daniil",
+    "editor": "wokwi",
+    "parts": [
+      {
+        "type": "board-stm32-bluepill",
+        "id": "mcu",
+        "top": 0,
+        "left": 0,
+        "attrs": {}
+      },
+      {
+        "type": "wokwi-serial-monitor",
+        "id": "serial",
+        "top": 100,
+        "left": 150,
+        "attrs": {}
+      }
+    ],
+    "connections": [
+      [ "mcu:PA9", "serial:RX", "green", [] ],
+      [ "mcu:PA10", "serial:TX", "blue", [] ]
+    ]
+  }
