@@ -11,15 +11,16 @@
         "attrs": {}
       },
       {
-        "type": "wokwi-serial-monitor",
-        "id": "serial",
-        "top": 100,
-        "left": 150,
-        "attrs": {}
+        "type": "wokwi-potentiometer",
+        "id": "pot1",
+        "top": 140,
+        "left": -150,
+        "attrs": { "value": "512" }
       }
     ],
     "connections": [
-      [ "mcu:PA9", "serial:RX", "green", [] ],
-      [ "mcu:PA10", "serial:TX", "blue", [] ]
+      [ "pot1:GND", "mcu:GND.1", "black", [] ],
+      [ "pot1:VCC", "mcu:3V3.1", "red", [] ],
+      [ "pot1:SIG", "mcu:A0", "orange", [] ]
     ]
   }
