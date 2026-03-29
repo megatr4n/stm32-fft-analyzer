@@ -1,121 +1,86 @@
 #include "stm32f1xx_hal.h"
-#include <string.h>
 #include <stdio.h>
-#include "arm_math.h" 
+#include <string.h>
 
-ADC_HandleTypeDef hadc1;
+// Підключаємо наші нові модулі
+#include "adc_handler.h"
+#include "dsp_processor.h"
 
-#define FFT_SIZE 1024
-uint16_t adc_buffer[FFT_SIZE];
-float32_t fft_input[FFT_SIZE * 2];   
-float32_t fft_magnitudes[FFT_SIZE];  
-float32_t hann_window[FFT_SIZE];     
-arm_cfft_radix4_instance_f32 fft_handler;
+UART_HandleTypeDef huart1;
+uint16_t adc_raw_data[FFT_SIZE];
+float32_t fft_working_buffer[FFT_SIZE * 2];
 
-// Налаштування пінів
-void GPIO_Init(void) {
+// Налаштування UART для виводу тексту
+void UART1_Init(void) {
+    __HAL_RCC_USART1_CLK_ENABLE();
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
+    GPIO_InitStruct.Pin = GPIO_PIN_9;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
+    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+    huart1.Instance = USART1;
+    huart1.Init.BaudRate = 115200;
+    huart1.Init.WordLength = UART_WORDLENGTH_8B;
+    huart1.Init.StopBits = UART_STOPBITS_1;
+    huart1.Init.Parity = UART_PARITY_NONE;
+    huart1.Init.Mode = UART_MODE_TX_RX;
+    huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+    huart1.Init.OverSampling = UART_OVERSAMPLING_16;
+    HAL_UART_Init(&huart1);
+}
+
+// Порожні функції для стабільності
+extern "C" void SystemClock_Config(void) {}
+extern "C" void SysTick_Handler(void) { HAL_IncTick(); }
+
+int main(void) {
+    HAL_Init();
+    
+    // Ініціалізація світлодіода PC13 (ми її випадково видалили при рефакторингу)
     __HAL_RCC_GPIOC_CLK_ENABLE();
     GPIO_InitTypeDef GPIO_InitStruct = {0};
     GPIO_InitStruct.Pin = GPIO_PIN_13;
     GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
     HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
-}
 
-// Налаштування АЦП
-void ADC_Init(void) {
-    __HAL_RCC_ADC1_CLK_ENABLE();
-    __HAL_RCC_GPIOA_CLK_ENABLE();
-    
-    GPIO_InitTypeDef GPIO_InitStruct = {0};
-    GPIO_InitStruct.Pin = GPIO_PIN_0; 
-    GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
-    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+    UART1_Init();
+    ADC_Handler_Init();
+    DSP_Init();
 
-    hadc1.Instance = ADC1;
-    hadc1.Init.ScanConvMode = ADC_SCAN_DISABLE;
-    hadc1.Init.ContinuousConvMode = DISABLE;
-    hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
-    hadc1.Init.NbrOfConversion = 1;
-    HAL_ADC_Init(&hadc1);
-
-    ADC_ChannelConfTypeDef sConfig = {0};
-    sConfig.Channel = ADC_CHANNEL_0;
-    sConfig.Rank = ADC_REGULAR_RANK_1;
-    sConfig.SamplingTime = ADC_SAMPLETIME_1CYCLE_5;
-    HAL_ADC_ConfigChannel(&hadc1, &sConfig);
-}
-
-// Створення вікна Ганна
-void generate_hann_window(float32_t* pWindow, uint16_t size) {
-    for (uint16_t i = 0; i < size; i++) {
-        pWindow[i] = 0.5f * (1.0f - arm_cos_f32(2.0f * PI * i / (size - 1)));
-    }
-}
-
-extern "C" void SysTick_Handler(void) { HAL_IncTick(); }
-
-int main(void) {
-    HAL_Init();
-    GPIO_Init();
-    ADC_Init();
-    
-    // Тест світлодіода при старті
-    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_RESET); // ВКЛ
-    HAL_Delay(500);
-    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET);   // ВИКЛ
-    HAL_Delay(500);
-
-    generate_hann_window(hann_window, FFT_SIZE);
-    arm_cfft_radix4_init_f32(&fft_handler, FFT_SIZE, 0, 1);
+    char msg[128];
+    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET); // Вимкнути діод спочатку
 
     while (1) {
-        // КРОК 1: Збір даних вручну (без таймера, щоб не ламалось)
-        for (int i = 0; i < FFT_SIZE; i++) {
-            HAL_ADC_Start(&hadc1);
-            HAL_ADC_PollForConversion(&hadc1, 10);
-            adc_buffer[i] = HAL_ADC_GetValue(&hadc1);
-            // Невелика затримка, щоб імітувати частоту дискретизації
-            for(volatile int j=0; j<100; j++); 
-        }
+        // 2. Збираємо дані через модуль (він сам знає про hadc1)
+        ADC_Handler_Collect(adc_raw_data);
 
-        // КРОК 2: Математика
-        float32_t mean_value = 0.0f;
-        for(uint16_t i = 0; i < FFT_SIZE; i++) {
-            fft_input[i * 2] = (float32_t)adc_buffer[i];
-            mean_value += fft_input[i * 2];
-        }
-        mean_value /= FFT_SIZE;
+        // 3. Готуємо дані (накладаємо вікно Ганна)
+        DSP_ApplyWindow(adc_raw_data, fft_working_buffer);
 
-        for(uint16_t i = 0; i < FFT_SIZE; i++) {
-            fft_input[i * 2] = (fft_input[i * 2] - mean_value) * hann_window[i];
-            fft_input[(i * 2) + 1] = 0.0f;
-        }
+        // 4. Аналізуємо (FFT та пошук піку)
+        uint32_t peak_index = 0;
+        float32_t max_val = DSP_Analyze(fft_working_buffer, &peak_index);
 
-        arm_cfft_radix4_f32(&fft_handler, fft_input);
-        arm_cmplx_mag_f32(fft_input, fft_magnitudes, FFT_SIZE);
+        // 5. Розрахунок частоти
+        float32_t freq = (float32_t)peak_index * (10000.0f / FFT_SIZE);
 
-        float32_t max_magnitude = 0.0f;
-        uint32_t max_index = 0;
-        arm_max_f32(&fft_magnitudes[1], (FFT_SIZE / 2) - 1, &max_magnitude, &max_index);
-
-        // КРОК 3: Візуалізація
-        // Якщо покрутиш потенціометр вгору - почне мигати швидко
-        // КРОК 3: Візуалізація (з ДУЖЕ довгими паузами для очей)
-        if (max_magnitude > 800.0f) {
-            // ТРИВОГА: 5 чітких швидких спалахів
-            for(int i = 0; i < 5; i++) {
-                HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_RESET); // ВКЛ
-                HAL_Delay(100);
-                HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET);   // ВИКЛ
-                HAL_Delay(100);
+        // 6. Візуалізація та вивід
+        if (max_val > 1500.0f) {
+            sprintf(msg, "!!! ALERT !!! Freq: %.2f Hz | Mag: %.2f\r\n", freq, max_val);
+            for(int i = 0; i < 6; i++) {
+                HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
+                HAL_Delay(50);
             }
         } else {
-            // СКАНУВАННЯ: Один довгий спалах
-            HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_RESET); // ВКЛ
-            HAL_Delay(500);
-            HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET);   // ВИКЛ
-            HAL_Delay(500);
+            sprintf(msg, "Scanning... Peak: %.2f Hz | Mag: %.2f\r\n", freq, max_val);
+            HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
+            HAL_Delay(200);
         }
+        
+        HAL_UART_Transmit(&huart1, (uint8_t*)msg, strlen(msg), 100);
+        HAL_Delay(300);
     }
 }
