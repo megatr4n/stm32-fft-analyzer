@@ -2,7 +2,6 @@
 #include <stdio.h>
 #include <string.h>
 
-// Підключаємо наші нові модулі
 #include "adc_handler.h"
 #include "dsp_processor.h"
 
@@ -10,7 +9,6 @@ UART_HandleTypeDef huart1;
 uint16_t adc_raw_data[FFT_SIZE];
 float32_t fft_working_buffer[FFT_SIZE * 2];
 
-// Налаштування UART для виводу тексту
 void UART1_Init(void) {
     __HAL_RCC_USART1_CLK_ENABLE();
     __HAL_RCC_GPIOA_CLK_ENABLE();
@@ -31,14 +29,12 @@ void UART1_Init(void) {
     HAL_UART_Init(&huart1);
 }
 
-// Порожні функції для стабільності
 extern "C" void SystemClock_Config(void) {}
 extern "C" void SysTick_Handler(void) { HAL_IncTick(); }
 
 int main(void) {
     HAL_Init();
     
-    // Ініціалізація світлодіода PC13 (ми її випадково видалили при рефакторингу)
     __HAL_RCC_GPIOC_CLK_ENABLE();
     GPIO_InitTypeDef GPIO_InitStruct = {0};
     GPIO_InitStruct.Pin = GPIO_PIN_13;
@@ -51,23 +47,18 @@ int main(void) {
     DSP_Init();
 
     char msg[128];
-    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET); // Вимкнути діод спочатку
+    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET);
 
     while (1) {
-        // 2. Збираємо дані через модуль (він сам знає про hadc1)
         ADC_Handler_Collect(adc_raw_data);
 
-        // 3. Готуємо дані (накладаємо вікно Ганна)
         DSP_ApplyWindow(adc_raw_data, fft_working_buffer);
 
-        // 4. Аналізуємо (FFT та пошук піку)
         uint32_t peak_index = 0;
         float32_t max_val = DSP_Analyze(fft_working_buffer, &peak_index);
 
-        // 5. Розрахунок частоти
         float32_t freq = (float32_t)peak_index * (10000.0f / FFT_SIZE);
 
-        // 6. Візуалізація та вивід
         if (max_val > 1500.0f) {
             sprintf(msg, "!!! ALERT !!! Freq: %.2f Hz | Mag: %.2f\r\n", freq, max_val);
             for(int i = 0; i < 6; i++) {
